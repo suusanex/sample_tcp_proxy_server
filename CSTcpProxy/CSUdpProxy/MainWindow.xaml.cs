@@ -34,37 +34,61 @@ namespace CSUdpProxy
 
         private void MainWindow_OnLoaded(object sender, RoutedEventArgs e)
         {
-            Task.Run(() => RunSv());
-        }
-        async void RunSv()
-        {
-            TraceLog("Start");
 
-            var udpRecieve = new UdpClient(new IPEndPoint(IPAddress.Loopback, 50080));
-            var udpSend = new UdpClient("10.0.0.12", 50080);
-        
+            Task.Run(() => RunSv(50080, "10.0.0.12", 50080));
+            Task.Run(() => RunSv(60080, "127.0.0.1", 60080));
+        }
+        async void RunSv(int localPort, string remoteIpAddr, int remotePort)
+        {
+            var threadId = $"{localPort}_{remoteIpAddr}_{remotePort}";
+            TraceLog($"Start, {threadId}");
+
+            var bufferSize = 64 * 1024 - 20 - 20;//とりあえずTCPウインドウサイズの一般的な最大値64KBからTCPヘッダ（UDPヘッダより大きい）とIPヘッダのサイズを引いた値。
+
+            var udpRecieve = new UdpClient(new IPEndPoint(IPAddress.Loopback, localPort));
+            udpRecieve.Client.ReceiveBufferSize = bufferSize;
+            var udpSend = new UdpClient(remoteIpAddr, remotePort);
+            udpSend.Client.ReceiveBufferSize = bufferSize;
+            TraceLog($"Connected, {threadId}, Local={(IPEndPoint)udpSend.Client.LocalEndPoint}, Remote={(IPEndPoint)udpSend.Client.RemoteEndPoint}");
+
+
             var firstRecieveRet = await udpRecieve.ReceiveAsync();
 
-            await udpSend.SendAsync(firstRecieveRet.Buffer, firstRecieveRet.Buffer.Length);
+            TraceLog($"first Receieved, {threadId}, {firstRecieveRet.RemoteEndPoint}, {firstRecieveRet.Buffer.Length}");
+
+            var sendSizeFirst = await udpSend.SendAsync(firstRecieveRet.Buffer, firstRecieveRet.Buffer.Length);
+
+            TraceLog($"first Send End, {threadId}, size={sendSizeFirst}");
 
             var taskForward = Task.Run(async () =>
             {
+                TraceLog($"taskForward Start, {threadId}");
                 while (true)
                 {
+
+                    udpRecieve.Client.ReceiveBufferSize = bufferSize;
                     var recieveRet = await udpRecieve.ReceiveAsync();
 
-                    await udpSend.SendAsync(recieveRet.Buffer, recieveRet.Buffer.Length);
+                    TraceLog($"taskForward, {threadId} Receieved, {recieveRet.RemoteEndPoint}, {recieveRet.Buffer.Length}");
+
+                    var sendSize = await udpSend.SendAsync(recieveRet.Buffer, recieveRet.Buffer.Length);
+                    TraceLog($"taskForward, {threadId} Send End, size={sendSize}");
                 }
             });
 
             var taskReverse = Task.Run(async () =>
             {
+                TraceLog($"taskReverse, {threadId} Start");
                 while (true)
                 {
+                    udpSend.Client.ReceiveBufferSize = bufferSize;
                     var sendReciveRet = await udpSend.ReceiveAsync();
 
-                    await udpRecieve.SendAsync(sendReciveRet.Buffer, sendReciveRet.Buffer.Length,
+                    TraceLog($"taskReverse, {threadId} Receieved, {sendReciveRet.RemoteEndPoint}, {sendReciveRet.Buffer.Length}");
+
+                    var sendSize = await udpRecieve.SendAsync(sendReciveRet.Buffer, sendReciveRet.Buffer.Length,
                         firstRecieveRet.RemoteEndPoint);
+                    TraceLog($"taskReverse, {threadId} Send End, size={sendSize}");
                 }
             });
 
